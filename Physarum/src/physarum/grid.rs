@@ -34,28 +34,31 @@ impl Grid {
         }
     }
 
+    #[inline(always)]
     fn index(&self, x: f32, y: f32) -> usize {
         let i = (x + self.width as f32) as usize & (self.width - 1);
         let j = (y + self.height as f32) as usize & (self.height - 1);
         j * self.width + i
     }
 
+    #[inline(always)]
     pub fn get_buf(&self, x: f32, y: f32) -> f32 {
         self.buf[self.index(x, y)]
     }
 
+    #[inline(always)]
     pub fn deposit(&mut self, x: f32, y: f32) {
         let idx = self.index(x, y);
         self.data[idx] += self.config.deposition_amount;
     }
 
-    pub fn diffuse(&mut self, radius: usize) {
+    pub fn diffuse(&mut self, radius: f32) {
         self.blur.run(
             &mut self.data,
             &mut self.buf,
             self.width,
             self.height,
-            radius as f32,
+            radius,
             self.config.decay_factor,
         );
     }

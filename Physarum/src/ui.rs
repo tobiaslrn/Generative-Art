@@ -58,9 +58,12 @@ pub fn update_gui(model: &mut Model, update: Update) {
 
                         model.changed |= ui
                             .add(
-                                egui::Slider::new(&mut model.physarum_settings.diffusivity, 1..=5)
-                                    .text("Diffusivity")
-                                    .smart_aim(false),
+                                egui::Slider::new(
+                                    &mut model.physarum_settings.diffusivity,
+                                    1.0..=5.0,
+                                )
+                                .text("Diffusivity")
+                                .smart_aim(false),
                             )
                             .changed();
 

@@ -1,5 +1,4 @@
 use itertools::multizip;
-use rayon::prelude::*;
 
 pub struct Blur {
     row_buffer: Vec<f32>,
@@ -26,7 +25,7 @@ impl Blur {
         self.box_blur(src, buf, width, height, boxes[1], decay);
     }
 
-    fn boxes_for_gaussian<const N: usize>(sigma: f32) -> ([usize; N]) {
+    fn boxes_for_gaussian<const N: usize>(sigma: f32) -> [usize; N] {
         let w_ideal = (12.0 * sigma * sigma / N as f32 + 1.0).sqrt();
         let mut w = w_ideal as usize;
         w -= 1 - (w & 1);
@@ -57,8 +56,8 @@ impl Blur {
     fn box_blur_h(&mut self, src: &[f32], dst: &mut [f32], width: usize, radius: usize) {
         let weight = 1.0 / (2 * radius + 1) as f32;
 
-        src.par_chunks_exact(width)
-            .zip(dst.par_chunks_exact_mut(width))
+        src.chunks_exact(width)
+            .zip(dst.chunks_exact_mut(width))
             .for_each(|(src_row, dst_row)| {
                 let mut value = src_row[width - radius - 1];
                 for j in 0..radius {

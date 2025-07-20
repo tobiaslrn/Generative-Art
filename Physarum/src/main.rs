@@ -22,7 +22,7 @@ struct PhysarumSettings {
     height: usize,
     n_particles: usize,
     n_populations: usize,
-    diffusivity: usize,
+    diffusivity: f32,
     palette_idx: usize,
 }
 
@@ -121,7 +121,7 @@ fn model(app: &App) -> Model {
     let (width, height) = (1024, 1024);
     let n_particles = 200000;
     let n_populations = 2;
-    let diffusivity = 1;
+    let diffusivity = 1.0;
     let palette_idx = 0;
     let configs: Vec<PopulationConfig> = {
         match config_set {
@@ -157,7 +157,7 @@ fn model(app: &App) -> Model {
         rng,
         Egui::from_window(&window),
         image_window,
-        DynamicImage::new_rgb8(width as u32, height as u32),
+        DynamicImage::new_rgba8(width as u32, height as u32),
     )
 }
 
@@ -168,7 +168,7 @@ fn update(_app: &App, model: &mut Model, update: Update) {
         ui::update_gui(model, update);
     }
     for _ in 0..model.steps_per_frame {
-        model.physarum_settings.model.step();
+        model.physarum_settings.model.step_simulation_agents();
     }
     model
         .physarum_settings

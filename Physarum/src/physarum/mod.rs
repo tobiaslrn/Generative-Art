@@ -4,5 +4,4 @@ pub mod palette;
 mod particle;
 pub mod physarum_model;
 pub mod population_config;
-mod trig;
 mod util;

@@ -4,17 +4,21 @@ use super::palette;
 use super::palette::Palette;
 use super::particle::Particle;
 use super::population_config::PopulationConfig;
-use itertools::multizip;
-use nannou::image::{DynamicImage, GenericImage, Rgba};
+use nannou::image::{DynamicImage, Rgba};
+use once_cell::sync::Lazy;
 use rand::{rngs::SmallRng, seq::SliceRandom, SeedableRng};
 use rand_distr::{Distribution, Normal};
-use rayon::prelude::{IntoParallelRefMutIterator, ParallelIterator};
-
+use rayon::iter::IndexedParallelIterator;
+use rayon::prelude::ParallelSliceMut;
+use rayon::{
+    iter::ParallelBridge,
+    prelude::{IntoParallelRefMutIterator, ParallelIterator},
+};
 pub struct PhysarumModel {
     pub grids: Vec<Grid>,
     agents: Vec<Particle>,
     attraction_table: Vec<Vec<f32>>,
-    diffusity: usize,
+    diffusity: f32,
     iteration: i32,
     palette: Palette,
 }
@@ -30,7 +34,7 @@ impl PhysarumModel {
         height: usize,
         n_particles: usize,
         n_populations: usize,
-        diffusity: usize,
+        diffusity: f32,
         palette_index: usize,
         rng: &mut SmallRng,
     ) -> Self {
@@ -92,7 +96,7 @@ impl PhysarumModel {
         }
     }
 
-    pub fn step(&mut self) {
+    pub fn step_simulation_agents(&mut self) {
         let grids = &mut self.grids;
         grid::combine(grids, &self.attraction_table);
 
@@ -142,31 +146,105 @@ impl PhysarumModel {
     }
 
     pub fn save_to_image(&self, image: &mut DynamicImage) {
-        let (width, height) = (self.grids[0].width, self.grids[0].height);
-        let max_values: Vec<_> = self
-            .grids
+        let w = self.grids[0].width as usize;
+        let h = self.grids[0].height as usize;
+
+        let palette: Vec<[f32; 3]> = self
+            .palette
+            .colors
             .iter()
-            .map(|grid| grid.quantile(0.999) * 1.5)
+            .map(|c| [c.0[0] as f32, c.0[1] as f32, c.0[2] as f32])
             .collect();
 
-        (0..height).for_each(|y| {
-            (0..width).for_each(|x| {
-                let i = y * width + x;
-                let (mut r, mut g, mut b) = (0.0_f32, 0.0_f32, 0.0_f32);
-                for (grid, max_value, color) in
-                    multizip((&self.grids, &max_values, &self.palette.colors))
-                {
-                    let mut t = (grid.data()[i] / max_value).clamp(0.0, 1.0);
-                    t = t.powf(1.0 / 2.2);
-                    r += color.0[0] as f32 * t;
-                    g += color.0[1] as f32 * t;
-                    b += color.0[2] as f32 * t;
+        let acc = self.accumulate_color_values(w, h, palette);
+
+        write_dynamic_image(image, w, acc);
+    }
+
+    fn accumulate_color_values(
+        &self,
+        width: usize,
+        height: usize,
+        palette: Vec<[f32; 3]>,
+    ) -> Vec<[f32; 3]> {
+        let pix_count = width * height;
+
+        let grid_params: Vec<(&[f32], [f32; 3], f32)> = self
+            .grids
+            .iter()
+            .zip(palette.into_iter())
+            .map(|(grid, col)| {
+                let slice = grid.data();
+                let inv_max = 1.0 / (grid.quantile(0.999) * 1.5);
+                (slice, col, inv_max)
+            })
+            .collect();
+
+        let mut acc = vec![[0.0_f32; 3]; pix_count];
+
+        acc.par_chunks_mut(BLOCK_SIZE)
+            .enumerate()
+            .for_each(|(block_idx, block)| {
+                let start = block_idx * BLOCK_SIZE;
+                for (j, pixel_acc) in block.iter_mut().enumerate() {
+                    let idx = start + j;
+                    let mut r = 0.0_f32;
+                    let mut g = 0.0_f32;
+                    let mut b = 0.0_f32;
+
+                    for &(slice, [cr, cg, cb], inv_max) in &grid_params {
+                        let v = slice[idx];
+                        let normalized = (v * inv_max).clamp(0.0, 1.0);
+                        let lut_idx = (normalized * (LUT_SIZE as f32 - 1.0)).round() as usize;
+                        let t = GAMMA_LUT[lut_idx];
+                        r += cr * t;
+                        g += cg * t;
+                        b += cb * t;
+                    }
+
+                    pixel_acc[0] = r;
+                    pixel_acc[1] = g;
+                    pixel_acc[2] = b;
                 }
-                r = r.clamp(0.0, 255.0);
-                g = g.clamp(0.0, 255.0);
-                b = b.clamp(0.0, 255.0);
-                image.put_pixel(x as u32, y as u32, Rgba([r as u8, g as u8, b as u8, 255]));
             });
-        });
+
+        acc
+    }
+}
+
+const LUT_SIZE: usize = 256;
+const BLOCK_SIZE: usize = 16_384;
+const INV_GAMMA: f32 = 1.0 / 2.2;
+
+static GAMMA_LUT: Lazy<[f32; LUT_SIZE]> = Lazy::new(|| {
+    let mut lut = [0.0_f32; LUT_SIZE];
+    let max_idx = (LUT_SIZE - 1) as f32;
+    for i in 0..LUT_SIZE {
+        let x = i as f32 / max_idx;
+        lut[i] = x.powf(INV_GAMMA);
+    }
+    lut
+});
+
+fn write_dynamic_image(image: &mut DynamicImage, w: usize, acc: Vec<[f32; 3]>) {
+    let buf = image.as_mut_rgba8().unwrap();
+    buf.enumerate_rows_mut().par_bridge().for_each(|(_, row)| {
+        for (x, y, pixel) in row {
+            let idx = y as usize * w + x as usize;
+            let r = to_u8(acc[idx][0]);
+            let g = to_u8(acc[idx][1]);
+            let b = to_u8(acc[idx][2]);
+            *pixel = Rgba([r, g, b, 255]);
+        }
+    });
+}
+
+const fn to_u8(v: f32) -> u8 {
+    if v < 0.0 {
+        0u8
+    } else if v > 255.0 {
+        255u8
+    } else {
+        v as u8
     }
 }
